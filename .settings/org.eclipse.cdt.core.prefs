@@ -1,0 +1,9 @@
+eclipse.preferences.version=1
+environment/project/0.362946684/IDF_PATH/delimiter=\:
+environment/project/0.362946684/IDF_PATH/operation=append
+environment/project/0.362946684/IDF_PATH/value=
+environment/project/0.362946684/PATH/delimiter=\:
+environment/project/0.362946684/PATH/operation=replace
+environment/project/0.362946684/PATH/value=/home/hai_dotcom/bin\:/home/hai_dotcom/.local/bin\:/usr/local/sbin\:/usr/local/bin\:/usr/sbin\:/usr/bin\:/sbin\:/bin\:/usr/games\:/usr/local/games\:/snap/bin\:/home/hai_dotcom/esp/xtensa-esp32-elf/bin
+environment/project/0.362946684/append=true
+environment/project/0.362946684/appendContributed=true
