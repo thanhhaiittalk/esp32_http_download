@@ -43,14 +43,17 @@
    the config you want - ie #define EXAMPLE_WIFI_SSID "mywifissid"
 */
 #define EXAMPLE_WIFI_SSID Hai Dotcom
-#define EXAMPLE_WIFI_PASS doremonnoita
+#define EXAMPLE_WIFI_PASS doremonnobita
 
 /* FreeRTOS event group to signal when we are connected & ready to make a request */
 static EventGroupHandle_t wifi_event_group;
 
+xQueueHandle http_task2_queue_handle = 0;
+xSemaphoreHandle task2_signal = 0;
 
 /*Prototype*/
 void sd_card_init();
+static void http_get_task_1();
 
 /* The event group allows multiple bits for each event,
    but we only care about one event - are we connected
@@ -58,11 +61,11 @@ void sd_card_init();
 const int CONNECTED_BIT = BIT0;
 
 /* Constants that aren't configurable in menuconfig */
-#define WEB_SERVER "www.hubharp.com"
+#define WEB_SERVER "host767.000webhostapp.com"
 #define WEB_PORT 80
-#define WEB_URL "http://www.hubharp.com/web_sound/BachGavotteShort.mp3"
-
-static const char *TAG = "example";
+#define WEB_URL "https://host767.000webhostapp.com/data/hcm_fine_arts_museum/phuoc_long_operation/english/sound/phuoc_long_operation.wav"
+static const char *TAG1 = "Task1";
+static const char *TAG2 = "Task2";
 
 static const char *REQUEST = "GET " WEB_URL " HTTP/1.0\r\n"
     "Host: "WEB_SERVER"\r\n"
@@ -105,13 +108,13 @@ static void initialise_wifi(void)
     					.bssid_set = 0
     			},
     		};
-    ESP_LOGI(TAG, "Setting WiFi configuration SSID %s...", wifi_config.sta.ssid);
+    ESP_LOGI(TAG1, "Setting WiFi configuration SSID %s...", wifi_config.sta.ssid);
     ESP_ERROR_CHECK( esp_wifi_set_mode(WIFI_MODE_STA) );
     ESP_ERROR_CHECK( esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config) );
     ESP_ERROR_CHECK( esp_wifi_start() );
 }
 
-static void http_get_task(void *pvParameters)
+static void http_get_task_1()
 {
     const struct addrinfo hints = {
         .ai_family = AF_INET,
@@ -121,7 +124,136 @@ static void http_get_task(void *pvParameters)
     struct in_addr *addr;
     int s, r;
     char recv_buf[64];
+    static bool begin_write_file;
+    int pos_begin = 0;
 
+    //while(1) {
+        /* Wait for the callback to set the CONNECTED_BIT in the
+           event group.
+        */
+    	/* H:Wait for BIT0 (CONNECTEC_BIT)
+    	 * 	Clear on exit = TRUE - parameter will be cleared in the event group before xEventGroupWaitBits() returns
+    me	 *	xWaitForAllBits = FALSE -If xWaitForAllBits is set to pdFALSE then xEventGroupWaitBits() will return when
+    	 *	any of the bits set
+    	 */
+        xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT,
+                            false, true, portMAX_DELAY);
+        ESP_LOGI(TAG1, "Connected to AP");
+
+        int err = getaddrinfo(WEB_SERVER, "80", &hints, &res);
+
+        if(err != 0 || res == NULL) {
+            ESP_LOGE(TAG1, "DNS lookup failed err=%d res=%p", err, res);
+            vTaskDelay(1000 / portTICK_PERIOD_MS);
+            //continue;
+        }
+
+        /* Code to print the resolved IP.
+
+           Note: inet_ntoa is non-reentrant, look at ipaddr_ntoa_r for "real" code */
+        addr = &((struct sockaddr_in *)res->ai_addr)->sin_addr;
+        ESP_LOGI(TAG1, "DNS lookup succeeded. IP=%s", inet_ntoa(*addr));
+
+        s = socket(res->ai_family, res->ai_socktype, 0);
+        if(s < 0) {
+            ESP_LOGE(TAG1, "... Failed to allocate socket.");
+            freeaddrinfo(res);
+            vTaskDelay(1000 / portTICK_PERIOD_MS);
+            //continue;
+        }
+        ESP_LOGI(TAG1, "... allocated socket");
+
+        if(connect(s, res->ai_addr, res->ai_addrlen) != 0) {
+            ESP_LOGE(TAG1, "... socket connect failed errno=%d", err);
+            close(s);
+            freeaddrinfo(res);
+            vTaskDelay(4000 / portTICK_PERIOD_MS);
+            //continue;
+        }
+
+        ESP_LOGI(TAG1, "... connected");
+        freeaddrinfo(res);
+
+        if (write(s, REQUEST, strlen(REQUEST)) < 0) {
+            ESP_LOGE(TAG1, "... socket send failed");
+            close(s);
+            vTaskDelay(4000 / portTICK_PERIOD_MS);
+            //continue;
+        }
+        ESP_LOGI(TAG1, "... socket send success");
+
+        struct timeval receiving_timeout;
+        receiving_timeout.tv_sec = 5;
+        receiving_timeout.tv_usec = 0;
+        if (setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &receiving_timeout,
+                sizeof(receiving_timeout)) < 0) {
+            ESP_LOGE(TAG1, "... failed to set socket receiving timeout");
+            close(s);
+            vTaskDelay(4000 / portTICK_PERIOD_MS);
+            //continue;
+        }
+        ESP_LOGI(TAG1, "... set socket receiving timeout success");
+
+        /* Read HTTP response */
+        printf("Read HTTP response \n");
+        FILE *f = fopen("/sdcard/ask1.wav","w");
+        if(f == NULL){
+          	printf("Failed to open file \n");
+        }else
+           	printf("Open file \n");
+        int count = 0;
+        do {
+            bzero(recv_buf, sizeof(recv_buf));
+            r = read(s, recv_buf, sizeof(recv_buf)-1);
+            if(strstr(recv_buf,"RIFF") != NULL){
+            	begin_write_file = true;
+            	pos_begin = (int)strstr(recv_buf,"RIFF")- (int)recv_buf;
+            }
+            if(begin_write_file == true){
+            	for(int i = 0; i<r; i++){
+            		if(i >= pos_begin){
+            	       fputc(recv_buf[i],f);
+            	       pos_begin = 0; //mean after check where RIFF begin, start writing at first byte
+            	     }
+   	            }
+            }
+
+            printf("\n downloading ... %d \n",count++);
+
+        } while(r > 0);
+        fclose(f);
+        ESP_LOGI(TAG1, "... done reading from socket. Last read return=%d errno=%d\r\n", r, err);
+        close(s);
+        char ch;
+/*        for(int countdown = 3; countdown >= 0; countdown--) {
+            ESP_LOGI(TAG1, "%d... ", countdown);
+            if(xSemaphoreTake(task2_signal,portMAX_DELAY)){
+            	ch ='i';
+            	//ESP_LOGI(TAG1,"%c\n",ch);
+            	if(!xQueueSend(http_task2_queue_handle,&ch,portMAX_DELAY)){
+            		printf("Failed to send \n");
+            	}
+            }
+        }
+        ESP_LOGI(TAG1, "Starting again!");*/
+        while(1){
+
+        }
+    //}
+}
+
+static void http_get_task_2(void *pvParameters)
+{
+    const struct addrinfo hints = {
+        .ai_family = AF_INET,
+        .ai_socktype = SOCK_STREAM,
+    };
+    struct addrinfo *res;
+    struct in_addr *addr;
+    int s, r;
+    char recv_buf[64];
+    char  * rec_ch;
+    rec_ch = (char*)calloc(32,sizeof(char));
     while(1) {
         /* Wait for the callback to set the CONNECTED_BIT in the
            event group.
@@ -131,105 +263,92 @@ static void http_get_task(void *pvParameters)
     me	 *	xWaitForAllBits = FALSE -If xWaitForAllBits is set to pdFALSE then xEventGroupWaitBits() will return when
     	 *	any of the bits set
     	 */
-    	printf("%s \n",REQUEST);
-        xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT,
-                            false, true, portMAX_DELAY);
-        ESP_LOGI(TAG, "Connected to AP");
+    	if(xQueueReceive(http_task2_queue_handle,&rec_ch,portMAX_DELAY)){
+    		xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT,
+    		                            false, true, portMAX_DELAY);
+    		        ESP_LOGI(TAG2, "Connected to AP");
+    		        //ESP_LOGI(TAG2,"%c\n",rec_ch);
+    		        int err = getaddrinfo(WEB_SERVER, "80", &hints, &res);
 
-        int err = getaddrinfo(WEB_SERVER, "80", &hints, &res);
+    		        if(err != 0 || res == NULL) {
+    		            ESP_LOGE(TAG2, "DNS lookup failed err=%d res=%p", err, res);
+    		            vTaskDelay(1000 / portTICK_PERIOD_MS);
+    		            continue;
+    		        }
 
-        if(err != 0 || res == NULL) {
-            ESP_LOGE(TAG, "DNS lookup failed err=%d res=%p", err, res);
-            vTaskDelay(1000 / portTICK_PERIOD_MS);
-            continue;
-        }
+    		        /* Code to print the resolved IP.
 
-        /* Code to print the resolved IP.
+    		           Note: inet_ntoa is non-reentrant, look at ipaddr_ntoa_r for "real" code */
+    		        addr = &((struct sockaddr_in *)res->ai_addr)->sin_addr;
+    		        ESP_LOGI(TAG2, "DNS lookup succeeded. IP=%s", inet_ntoa(*addr));
 
-           Note: inet_ntoa is non-reentrant, look at ipaddr_ntoa_r for "real" code */
-        addr = &((struct sockaddr_in *)res->ai_addr)->sin_addr;
-        ESP_LOGI(TAG, "DNS lookup succeeded. IP=%s", inet_ntoa(*addr));
+    		        s = socket(res->ai_family, res->ai_socktype, 0);
+    		        if(s < 0) {
+    		            ESP_LOGE(TAG2, "... Failed to allocate socket.");
+    		            freeaddrinfo(res);
+    		            vTaskDelay(1000 / portTICK_PERIOD_MS);
+    		            //continue;
+    		        }
+    		        ESP_LOGI(TAG2, "... allocated socket");
 
-        s = socket(res->ai_family, res->ai_socktype, 0);
-        if(s < 0) {
-            ESP_LOGE(TAG, "... Failed to allocate socket.");
-            freeaddrinfo(res);
-            vTaskDelay(1000 / portTICK_PERIOD_MS);
-            //continue;
-        }
-        ESP_LOGI(TAG, "... allocated socket");
+    		        if(connect(s, res->ai_addr, res->ai_addrlen) != 0) {
+    		            ESP_LOGE(TAG2, "... socket connect failed errno=%d", err);
+    		            close(s);
+    		            freeaddrinfo(res);
+    		            vTaskDelay(4000 / portTICK_PERIOD_MS);
+    		            continue;
+    		        }
 
-        if(connect(s, res->ai_addr, res->ai_addrlen) != 0) {
-            ESP_LOGE(TAG, "... socket connect failed errno=%d", err);
-            close(s);
-            freeaddrinfo(res);
-            vTaskDelay(4000 / portTICK_PERIOD_MS);
-            continue;
-        }
+    		        ESP_LOGI(TAG2, "... connected");
+    		        freeaddrinfo(res);
 
-        ESP_LOGI(TAG, "... connected");
-        freeaddrinfo(res);
+    		        if (write(s, REQUEST, strlen(REQUEST)) < 0) {
+    		            ESP_LOGE(TAG2, "... socket send failed");
+    		            close(s);
+    		            vTaskDelay(4000 / portTICK_PERIOD_MS);
+    		            continue;
+    		        }
+    		        ESP_LOGI(TAG2, "... socket send success");
 
-        if (write(s, REQUEST, strlen(REQUEST)) < 0) {
-            ESP_LOGE(TAG, "... socket send failed");
-            close(s);
-            vTaskDelay(4000 / portTICK_PERIOD_MS);
-            continue;
-        }
-        ESP_LOGI(TAG, "... socket send success");
+    		        struct timeval receiving_timeout;
+    		        receiving_timeout.tv_sec = 5;
+    		        receiving_timeout.tv_usec = 0;
+    		        if (setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &receiving_timeout,
+    		                sizeof(receiving_timeout)) < 0) {
+    		            ESP_LOGE(TAG2, "... failed to set socket receiving timeout");
+    		            close(s);
+    		            vTaskDelay(4000 / portTICK_PERIOD_MS);
+    		            continue;
+    		        }
+    		        ESP_LOGI(TAG2, "... set socket receiving timeout success");
 
-        struct timeval receiving_timeout;
-        receiving_timeout.tv_sec = 5;
-        receiving_timeout.tv_usec = 0;
-        if (setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &receiving_timeout,
-                sizeof(receiving_timeout)) < 0) {
-            ESP_LOGE(TAG, "... failed to set socket receiving timeout");
-            close(s);
-            vTaskDelay(4000 / portTICK_PERIOD_MS);
-            continue;
-        }
-        ESP_LOGI(TAG, "... set socket receiving timeout success");
+    		        /* Read HTTP response */
+    		        static int i =0;
+    		        static char name[32];
+    		        sprintf(name,"/sdcard/%d.txt",i++);
+    		        ESP_LOGI(TAG2,"Read http response %s",name);
+    		        FILE *f = fopen(name,"w");
+    		        if(f == NULL){
+    		          	ESP_LOGI(TAG2,"Failed to open file \n");
+    		        }else
+    		        	ESP_LOGI(TAG2,"open file \n");;
+    		        int count = 0;
+    		        do {
+    		            bzero(recv_buf, sizeof(recv_buf));
+    		            r = read(s, recv_buf, sizeof(recv_buf)-1);
+    		            for(int i = 0; i<r; i++){
+    		            	fputc(recv_buf[i],f);
+    		            }
+    		            ESP_LOGI(TAG2,"\n downloading ... %d",count++);
 
-        /* Read HTTP response */
-        printf("Read HTTP response \n");
-        FILE *f = fopen("/sdcard/abc_mp3.mp3","wb");
-        if(f == NULL){
-          	printf("Failed to open file \n");
-        }else
-           	printf("Open file \n");
-        int count = 0;
-        bool flag = false;
-        uint8_t pos = 0;
-        char ch;
-        do {
-            bzero(recv_buf, sizeof(recv_buf));
-            r = read(s, recv_buf, sizeof(recv_buf)-1);
-//            if(strstr(recv_buf,"ID3") != NULL){
-//            	flag = true;
-//            	pos = strstr(recv_buf,"ID3") - recv_buf;
-//            	int j = 0;
-//            	for(int i = pos; i<=r;i++){
-//            		fputc(recv_buf[i],f);
-//            	}
-//            }else if (flag == true){
-//            	for(int i = 0; i < r;i++){
-//            		fputc(recv_buf[i],f);
-//            	}
-//            }
-            for(int i = 0; i<r; i++){
-            	fputc(recv_buf[i],f);
-            }
-            printf("\n downloading ... %d \n",count++);
+    		        } while(r > 0);
+    		        fclose(f);
+    		        ESP_LOGI(TAG2, "... done reading from socket. Last read return=%d errno=%d\r\n", r, err);
+    		        close(s);
+    		        //free(rec_ch);
+    		        xSemaphoreGive(task2_signal);
+    	}
 
-        } while(r > 0);
-        fclose(f);
-        ESP_LOGI(TAG, "... done reading from socket. Last read return=%d errno=%d\r\n", r, err);
-        close(s);
-        for(int countdown = 10; countdown >= 0; countdown--) {
-            ESP_LOGI(TAG, "%d... ", countdown);
-            vTaskDelay(1000 / portTICK_PERIOD_MS);
-        }
-        ESP_LOGI(TAG, "Starting again!");
     }
 }
 
@@ -280,6 +399,9 @@ void app_main()
     ESP_ERROR_CHECK( nvs_flash_init() );
     initialise_wifi();
     sd_card_init();
+    http_task2_queue_handle = xQueueCreate(2,sizeof(char));
+    vSemaphoreCreateBinary(task2_signal);
+    xTaskCreate(&http_get_task_1, "http_get_task_1", 2048, NULL, 2, NULL);
+    //xTaskCreate(&http_get_task_2, "http_get_task_2", 2048, NULL, 1, NULL);
 
-    xTaskCreate(&http_get_task, "http_get_task", 4096, NULL, 5, NULL);
 }
